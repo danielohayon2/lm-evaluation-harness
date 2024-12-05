@@ -1,3 +1,5 @@
+import habana_frameworks.torch.core as htcore
+import habana_frameworks.torch # <-- extra import
 import itertools
 import json
 import logging
@@ -179,6 +181,7 @@ def simple_evaluate(
         if gen_kwargs == "":
             gen_kwargs = None
 
+    # breakpoint()
     if isinstance(model, str):
         if model_args is None:
             eval_logger.warning("model_args not specified. Using defaults.")
@@ -300,6 +303,7 @@ def simple_evaluate(
             fewshot_as_multiturn=fewshot_as_multiturn,
         )
 
+    # breakpoint()
     results = evaluate(
         lm=lm,
         task_dict=task_dict,

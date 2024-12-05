@@ -1,3 +1,4 @@
+import habana_frameworks.torch
 import copy
 import os
 from datetime import timedelta
@@ -92,6 +93,7 @@ class HFLM(TemplateLM):
         gptqmodel: Optional[bool] = False,
         **kwargs,
     ) -> None:
+        # breakpoint()
         super().__init__()
         # optionally: take in an already-initialized transformers.PreTrainedModel
         if not isinstance(pretrained, str):
@@ -109,7 +111,8 @@ class HFLM(TemplateLM):
             assert isinstance(pretrained, str)
             assert isinstance(batch_size, (int, str))
 
-            gpus = torch.cuda.device_count()
+            if device == "hpu":
+                gpus = 1
             accelerator_kwargs = InitProcessGroupKwargs(timeout=timedelta(weeks=52))
             accelerator = Accelerator(kwargs_handlers=[accelerator_kwargs])
             if accelerator.num_processes > 1:
@@ -126,6 +129,7 @@ class HFLM(TemplateLM):
                     + [f"cuda:{i}" for i in range(gpus)]
                     + ["mps", "mps:0"]
                     + [f"npu:{i}" for i in range(gpus)]
+                    + ["hpu"]
                 )
                 if device and device in device_list:
                     self._device = torch.device(device)
@@ -242,6 +246,10 @@ class HFLM(TemplateLM):
                     # or any other option that preloads model onto device
                     try:
                         self.model.to(self.device)
+                        # breakpoint()
+                        if device == 'hpu':
+                            from habana_frameworks.torch.hpu import wrap_in_hpu_graph
+                            self._model = wrap_in_hpu_graph(self._model)
                     except ValueError:
                         eval_logger.debug(
                             "Failed to place model onto specified device. This may be because the model is quantized via `bitsandbytes` or `device_map` is provided. If the desired GPU is being used, this message is safe to ignore."
@@ -300,6 +308,7 @@ class HFLM(TemplateLM):
         """Returns the kwargs needed to apply `accelerate` in `AutoModel.from_pretrained`."""
         num_local_processes = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
         num_machines = int(os.environ.get("WORLD_SIZE", 0)) // num_local_processes
+        # breakpoint()
         if (
             num_machines == 0
             and hasattr(self, "accelerator")
@@ -550,6 +559,7 @@ class HFLM(TemplateLM):
         """
 
         model_kwargs = kwargs if kwargs else {}
+        # breakpoint()
 
         model_kwargs.update(
             self._get_accelerate_args(
@@ -574,6 +584,7 @@ class HFLM(TemplateLM):
                             model_kwargs["bnb_4bit_compute_dtype"]
                         )
 
+            # breakpoint()
             self._model = self.AUTO_MODEL_CLASS.from_pretrained(
                 pretrained,
                 revision=revision,

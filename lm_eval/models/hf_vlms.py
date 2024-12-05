@@ -1,3 +1,5 @@
+import habana_frameworks.torch.core as htcore
+import habana_frameworks.torch # <-- extra import
 import copy
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -33,7 +35,7 @@ class HFMultimodalLM(HFLM):
     An abstracted Hugging Face model class for multimodal LMs like Llava and Idefics.
     """
 
-    AUTO_MODEL_CLASS = transformers.AutoModelForVision2Seq
+    AUTO_MODEL_CLASS = transformers.AutoModelForImageTextToText
     MULTIMODAL = True  # flag to indicate, for now, that this model type can run multimodal requests
 
     def __init__(
@@ -307,6 +309,8 @@ class HFMultimodalLM(HFLM):
             return_tensors="pt",
             # **add_special_tokens, # TODO: at least some Processors error out when passing this. How do we control whether text gets BOS added?
         )
+
+        # breakpoint()
 
         encoding.to(  # TODO: our other tokenization methods in HFLM don't typically move to device. this breaks convention
             self.device, self.model.dtype
@@ -676,6 +680,7 @@ class HFMultimodalLM(HFLM):
             if "max_length" not in kwargs:
                 kwargs["max_length"] = context_enc.shape[1] + max_gen_toks
 
+            # breakpoint()
             cont = self._model_multimodal_generate(inputs, stop=until, **kwargs)
 
             del inputs

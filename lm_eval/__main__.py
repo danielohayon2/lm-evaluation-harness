@@ -1,3 +1,4 @@
+import habana_frameworks.torch
 import argparse
 import json
 import logging
