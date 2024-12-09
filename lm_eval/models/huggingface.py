@@ -247,9 +247,11 @@ class HFLM(TemplateLM):
                     try:
                         self.model.to(self.device)
                         # breakpoint()
-                        if device == 'hpu':
-                            from habana_frameworks.torch.hpu import wrap_in_hpu_graph
-                            self._model = wrap_in_hpu_graph(self._model)
+                        # if device == 'hpu':
+                            # from habana_frameworks.torch.hpu import wrap_in_hpu_graph
+                            # import habana_frameworks.torch.core as htcore
+                            # self._model = wrap_in_hpu_graph(self._model)
+                            # htcore.hpu_initialize(self._model)
                     except ValueError:
                         eval_logger.debug(
                             "Failed to place model onto specified device. This may be because the model is quantized via `bitsandbytes` or `device_map` is provided. If the desired GPU is being used, this message is safe to ignore."
