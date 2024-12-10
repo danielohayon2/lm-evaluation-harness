@@ -28,6 +28,14 @@ DEFAULT_IMAGE_PLACEHOLDER = "<image>"
 
 eval_logger = utils.eval_logger
 
+import subprocess
+def check_gpu_memory():
+    try:
+        result = subprocess.check_output(['hl-smi'], encoding='utf-8')
+        print("\nHPU Memory Status:")
+        print(result)
+    except Exception as e:
+        print(f"Error running nvidia-smi: {e}")
 
 @register_model("hf-multimodal")
 class HFMultimodalLM(HFLM):
@@ -681,7 +689,9 @@ class HFMultimodalLM(HFLM):
                 kwargs["max_length"] = context_enc.shape[1] + max_gen_toks
 
             # breakpoint()
+            # check_gpu_memory()
             cont = self._model_multimodal_generate(inputs, stop=until, **kwargs)
+            # htcore.mark_step()
 
             del inputs
             torch.cuda.empty_cache()

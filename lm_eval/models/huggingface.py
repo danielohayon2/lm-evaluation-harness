@@ -5,6 +5,14 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Tuple, Union
 
+import json
+from pathlib import Path
+import copy
+import glob
+import shutil
+import tempfile
+import time
+
 import jinja2
 import torch
 import torch.nn.functional as F
@@ -39,9 +47,180 @@ from lm_eval.models.utils import (
     stop_sequences_criteria,
 )
 
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 eval_logger = utils.eval_logger
 
+from transformers.utils import is_offline_mode
+from huggingface_hub import list_repo_files, snapshot_download
+def get_repo_root(model_name_or_path, local_rank=-1, token=None):
+    """
+    Downloads the specified model checkpoint and returns the repository where it was downloaded.
+    """
+    if Path(model_name_or_path).is_dir():
+        # If it is a local model, no need to download anything
+        return model_name_or_path
+    else:
+        # Checks if online or not
+        if is_offline_mode():
+            if local_rank == 0:
+                print("Offline mode: forcing local_files_only=True")
+
+        # Only download PyTorch weights by default
+        if any(
+            ".safetensors" in filename for filename in list_repo_files(model_name_or_path, token=token)
+        ):  # Some models like Falcon-180b are in only safetensors format
+            allow_patterns = ["*.safetensors"]
+        elif any(".bin" in filename for filename in list_repo_files(model_name_or_path, token=token)):
+            allow_patterns = ["*.bin"]
+        else:
+            raise TypeError("Only PyTorch models are supported")
+
+        # Download only on first process
+        if local_rank in [-1, 0]:
+            cache_dir = snapshot_download(
+                model_name_or_path,
+                local_files_only=is_offline_mode(),
+                cache_dir=os.getenv("TRANSFORMERS_CACHE", None),
+                allow_patterns=allow_patterns,
+                max_workers=16,
+                token=token,
+            )
+            if local_rank == -1:
+                # If there is only one process, then the method is finished
+                return cache_dir
+
+        # Make all processes wait so that other processes can get the checkpoint directly from cache
+        if torch.distributed.is_initialized():
+            torch.distributed.barrier()
+
+        return snapshot_download(
+            model_name_or_path,
+            local_files_only=is_offline_mode(),
+            cache_dir=os.getenv("TRANSFORMERS_CACHE", None),
+            allow_patterns=allow_patterns,
+            token=token,
+        )
+
+def get_checkpoint_files(model_name_or_path, local_rank, token=None):
+    cached_repo_dir = get_repo_root(model_name_or_path, local_rank=local_rank, token=token)
+    from transformers import modeling_utils
+
+    # Extensions: .bin | .safetensors | .pt
+    # Creates a list of paths from all downloaded files in cache dir
+
+    if any(file.suffix == ".bin" for file in Path(cached_repo_dir).rglob("*")):
+        (name, ext) = os.path.splitext(modeling_utils.WEIGHTS_NAME)
+    elif any(file.suffix == ".safetensors" for file in Path(cached_repo_dir).rglob("*")):
+        (name, ext) = os.path.splitext(modeling_utils.SAFE_WEIGHTS_NAME)
+    else:
+        (name, ext) = ("*", ".pt")
+
+    file_list = [
+        str(entry)
+        for entry in Path(cached_repo_dir).rglob("*")
+        if (entry.is_file() and entry.name.startswith(name) and entry.name.endswith(ext))
+    ]
+
+    return file_list
+
+
+def write_checkpoints_json(model_name_or_path, local_rank, f, token=None):
+    """
+    Dumps metadata into a JSON file for DeepSpeed-inference.
+    """
+    checkpoint_files = get_checkpoint_files(model_name_or_path, local_rank, token)
+    data = {"type": "ds_model", "checkpoints": checkpoint_files, "version": 1.0}
+    json.dump(data, f)
+    f.flush()
+
+def patch_scoped_linear_all_reduce(model):
+    from deepspeed.module_inject.layers import LinearAllreduce
+
+    from optimum.habana.transformers.models.modeling_all_models import ScopedLinearAllReduce
+
+    for name, module in model.named_children():
+        if type(module) is LinearAllreduce:
+            SL = ScopedLinearAllReduce(mod=module)
+            setattr(model, name, SL)
+        patch_scoped_linear_all_reduce(module)
+
+def model_on_meta(config):
+    """
+    Checks if load the model to meta.
+    """
+    return config.model_type in ["bloom", "llama", "falcon", "mixtral", "qwen2", "mllama_vision_model"]
+
+def setup_distributed_model(cls, model_name_or_path, model_dtype):
+    model_dtype = torch.bfloat16
+    model_kwargs = {
+        "revision": "main",
+        # "token": args.token,
+        "trust_remote_code": True,
+    }
+    model_kwargs["torch_dtype"] = torch.bfloat16
+
+    # breakpoint()
+    local_rank = int(os.getenv("LOCAL_RANK", "0"))
+    world_size = int(os.getenv("WORLD_SIZE", "0"))
+    global_rank = int(os.getenv("RANK", "0"))
+
+    import deepspeed
+
+    # logger.info("DeepSpeed is enabled.")
+    deepspeed.init_distributed(dist_backend="hccl")
+    config = AutoConfig.from_pretrained(model_name_or_path, torch_dtype=get_dtype(model_dtype))
+    # load_to_meta = model_on_meta(config)
+    load_to_meta = True
+
+    assistant_model = None
+
+    if load_to_meta:
+        # Construct model with fake meta tensors, later will be replaced on devices during ds-inference ckpt load
+        with deepspeed.OnDevice(dtype=model_dtype, device="meta"):
+            model = cls.from_config(config, torch_dtype=model_dtype)
+
+        # Model loaded to meta is managed differently
+        checkpoints_json = tempfile.NamedTemporaryFile(suffix=".json", mode="+w")
+
+
+        write_checkpoints_json(
+            model_name_or_path,
+            local_rank,
+            checkpoints_json,
+        )
+    else:
+        # TODO: revisit placement on CPU when auto-injection is possible
+        with deepspeed.OnDevice(dtype=model_dtype, device="cpu"):
+            model = cls.from_pretrained(
+                model_name_or_path, torch_dtype=get_dtype(model_dtype), **model_kwargs
+            )
+    model.eval()
+
+    # Initialize the model
+    ds_inference_kwargs = {"dtype": model_dtype}
+    ds_inference_kwargs["tensor_parallel"] = {"tp_size": world_size}
+    ds_inference_kwargs["enable_cuda_graph"] = False # TODO: fix, hpu graphs still memory leak 
+    from transformers.models.llama.modeling_llama import LlamaDecoderLayer
+
+    policy = {LlamaDecoderLayer: ("self_attn.o_proj", "mlp.down_proj")}
+    ds_inference_kwargs["injection_policy"] = policy 
+    if load_to_meta:
+        ds_inference_kwargs["checkpoint"] = checkpoints_json.name
+
+    model = deepspeed.init_inference(model, **ds_inference_kwargs)
+    model = model.module
+    if model.config.model_type in ["llama", "falcon", "qwen2", "starcoder2", "gemma"]:
+        patch_scoped_linear_all_reduce(model)
+
+    # if args.quant_config:
+    #     model = setup_quantization(model, args)
+
+    # if args.torch_compile:
+    #     model = get_torch_compiled_model(model)
+        # if args.assistant_model is not None:
+        #     assistant_model = get_torch_compiled_model(assistant_model)
+    return model, assistant_model
 
 @register_model("hf-auto", "hf", "huggingface")
 class HFLM(TemplateLM):
@@ -200,6 +379,7 @@ class HFLM(TemplateLM):
                 delta=delta,
                 autogptq=autogptq,
                 gptqmodel=gptqmodel,
+                deepspeed = True,
                 **kwargs,
             )
 
@@ -236,6 +416,8 @@ class HFLM(TemplateLM):
             self.batch_schedule = float(batch_size[1]) if len(batch_size) > 1 else 1
         else:
             self.batch_size_per_gpu = int(batch_size)
+
+        # breakpoint()
 
         if isinstance(pretrained, str):
             if gpus >= 1 or str(self.device) == "mps":
@@ -546,6 +728,7 @@ class HFLM(TemplateLM):
         delta: Optional[str] = None,
         autogptq: Optional[Union[bool, str]] = False,
         gptqmodel: Optional[bool] = False,
+        deepspeed: bool = False,
         **kwargs,
     ) -> None:
         """
@@ -586,14 +769,21 @@ class HFLM(TemplateLM):
                             model_kwargs["bnb_4bit_compute_dtype"]
                         )
 
-            # breakpoint()
-            self._model = self.AUTO_MODEL_CLASS.from_pretrained(
-                pretrained,
-                revision=revision,
-                torch_dtype=get_dtype(dtype),
-                trust_remote_code=trust_remote_code,
-                **model_kwargs,
-            )
+            if  str(self.device) == 'hpu' and deepspeed:
+                self._model = setup_distributed_model(self.AUTO_MODEL_CLASS, pretrained, get_dtype(dtype))
+
+
+            else: 
+                self._model = self.AUTO_MODEL_CLASS.from_pretrained(
+                    pretrained,
+                    revision=revision,
+                    torch_dtype=get_dtype(dtype),
+                    trust_remote_code=trust_remote_code,
+                    **model_kwargs,
+                )
+
+            self._model = self._model.to("hpu")
+            print("\n"*5 + f"device = {self._model.device}" + "\n"*5)
         else:
             if autogptq and gptqmodel:
                 raise ValueError(
