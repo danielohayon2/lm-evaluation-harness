@@ -39,12 +39,25 @@ from lm_eval.utils import (
     positional_deprecated,
     simple_parse_args_string,
 )
+import os
 
 
 if TYPE_CHECKING:
     from lm_eval.api.model import LM
     from lm_eval.api.task import Task
 
+
+def finalize_quantization(model):
+    quant_config = os.getenv("QUANT_CONFIG", "")
+    if quant_config == "":
+        return 
+    try:
+        from neural_compressor.torch.quantization import finalize_calibration
+    except ImportError:
+        raise ImportError(
+            "Module neural_compressor is missing. Please use a newer Synapse version to use quantization."
+        )
+    finalize_calibration(model)
 
 @positional_deprecated
 def simple_evaluate(
@@ -304,6 +317,8 @@ def simple_evaluate(
         )
 
     # breakpoint()
+    #BM: start evaluating the model on the tasks
+    # breakpoint()
     results = evaluate(
         lm=lm,
         task_dict=task_dict,
@@ -318,6 +333,8 @@ def simple_evaluate(
         fewshot_as_multiturn=fewshot_as_multiturn,
         verbosity=verbosity,
     )
+    # breakpoint()
+    finalize_quantization(lm._model)
 
     if lm.rank == 0:
         if isinstance(model, str):

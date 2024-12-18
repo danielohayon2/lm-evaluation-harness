@@ -1,0 +1,18 @@
+{
+    "method": "HOOKS",
+    "mode": "QUANTIZE",
+    "observer": "maxabs_per_channel",
+    "scale_method": "smoothquant_weights_output_channel_maxabs_pow2",
+    "dump_stats_path": "./hqt_output/measure",
+    "blacklist": {
+        "types": ["Conv2d"],
+        "names": [
+            "cache",
+            "softmax",
+            "conv"
+        ]
+    }
+
+
+}
+

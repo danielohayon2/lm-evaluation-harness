@@ -42,6 +42,25 @@ from lm_eval.models.utils import (
 
 eval_logger = utils.eval_logger
 
+def setup_quantization(model):
+    quant_config = os.getenv("QUANT_CONFIG", "")
+    if quant_config == "":
+        return model
+    try:
+        from neural_compressor.torch.quantization import FP8Config, convert, prepare
+    except ImportError:
+        raise ImportError(
+            "Module neural_compressor is missing. Please use a newer Synapse version to use quantization."
+        )
+
+    config = FP8Config.from_json_file(quant_config)
+    if config.measure:
+        model = prepare(model, config)
+    if config.quantize:
+        model = convert(model, config)
+
+    return model
+
 
 @register_model("hf-auto", "hf", "huggingface")
 class HFLM(TemplateLM):
@@ -184,6 +203,7 @@ class HFLM(TemplateLM):
             use_fast_tokenizer=use_fast_tokenizer,
         )
 
+        # DO: model initialization
         # if we passed `pretrained` as a string, initialize our model now
         if isinstance(pretrained, str):
             self._create_model(
@@ -587,6 +607,7 @@ class HFLM(TemplateLM):
                         )
 
             # breakpoint()
+            # BM: model initialization
             self._model = self.AUTO_MODEL_CLASS.from_pretrained(
                 pretrained,
                 revision=revision,
@@ -594,6 +615,9 @@ class HFLM(TemplateLM):
                 trust_remote_code=trust_remote_code,
                 **model_kwargs,
             )
+            # breakpoint()
+            setup_quantization(self._model) #maybe the model needs to be on the device already?
+
         else:
             if autogptq and gptqmodel:
                 raise ValueError(

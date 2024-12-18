@@ -1,0 +1,18 @@
+{
+    "method": "HOOKS",
+    "mode": "QUANTIZE",
+    "observer": "maxabs",
+    "scale_method": "act_maxabs_pow2_weights_pcs_opt_pow2",
+    "dump_stats_path": "./hqt_output/measure",
+    "blacklist": {
+        "types": ["Conv2d"],
+        "names": [
+            "cache",
+            "softmax",
+            "conv"
+        ]
+    }
+
+
+}
+

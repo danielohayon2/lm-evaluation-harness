@@ -1,0 +1,7 @@
+{
+    "method": "HOOKS",
+    "mode": "MEASURE",
+    "observer": "shape",
+    "dump_stats_path": "./hqt_output/measure"
+}
+

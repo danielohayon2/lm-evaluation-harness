@@ -1,0 +1,7 @@
+{
+    "method": "HOOKS",
+    "mode": "MEASURE",
+    "observer": "maxabs_per_channel",
+    "dump_stats_path": "./hqt_output/measure"
+}
+
