@@ -44,6 +44,20 @@ if TYPE_CHECKING:
     from lm_eval.api.task import Task
 
 
+def count_images_in_doc(doc):
+    """Count number of non-None images in a document."""
+    return sum(1 for i in range(1, 8) if doc[f'image_{i}'] is not None)
+
+def filter_multi_image_docs_in_task_dict(task_dict):
+    """Filter multi-image documents from all tasks in the task dict."""
+    for main_group, subject_groups in task_dict.items():
+        for subject_group, tasks in subject_groups.items():
+            for task_name, task in tasks.items():
+                docs = task.validation_docs()
+                filtered_docs = docs.filter(lambda doc: count_images_in_doc(doc) <= 1)
+                # Replace the validation_docs method
+                task.validation_docs = lambda filtered=filtered_docs: filtered
+
 @positional_deprecated
 def simple_evaluate(
     model,
@@ -234,7 +248,10 @@ def simple_evaluate(
         task_manager = TaskManager(verbosity)
 
     task_dict = get_task_dict(tasks, task_manager)
+    filter_multi_image_docs_in_task_dict(task_dict)
 
+    print(task_dict)
+    # breakpoint()
     # helper function to recursively apply config overrides to leaf subtasks, skipping their constituent groups.
     # (setting of num_fewshot ; bypassing metric calculation ; setting fewshot seed)
     def _adjust_config(task_dict):
@@ -309,7 +326,7 @@ def simple_evaluate(
         rewrite_requests_cache=rewrite_requests_cache,
         bootstrap_iters=bootstrap_iters,
         write_out=write_out,
-        log_samples=True if predict_only else log_samples,
+        log_samples=True,
         system_instruction=system_instruction,
         apply_chat_template=apply_chat_template,
         fewshot_as_multiturn=fewshot_as_multiturn,
@@ -355,6 +372,11 @@ def simple_evaluate(
         results["date"] = start_date
         add_env_info(results)  # additional environment info to results
         add_tokenizer_info(results, lm)  # additional info about tokenizer
+        import pickle 
+        with open('llama90b.pkl', 'wb') as f: pickle.dump(results, f)
+
+        # breakpoint()
+
         return results
     else:
         return None

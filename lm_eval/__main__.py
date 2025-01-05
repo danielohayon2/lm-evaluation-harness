@@ -384,6 +384,7 @@ def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
         cache_requests=args.cache_requests
     )
 
+    # breakpoint()
     results = evaluator.simple_evaluate(
         model=args.model,
         model_args=args.model_args,
