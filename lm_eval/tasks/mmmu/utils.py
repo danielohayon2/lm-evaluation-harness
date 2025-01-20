@@ -74,6 +74,7 @@ def _doc_to_text(doc):
 
 
 def process_results(doc, results):
+    print("Using evaluations without guessing")
     if doc["question_type"] == "multiple-choice":
         # multichoice logic
         option_strs = ast.literal_eval(doc["options"])
@@ -132,7 +133,8 @@ def parse_multi_choice_response(response, all_choices, index2ans):
                 index_ans = False  # it's content ans.
 
     if len(candidates) == 0:  # still not get answer, randomly choose one.
-        pred_index = random.choice(all_choices)
+        pred_index = -1
+        print("selected index -1")
     elif len(candidates) > 1:
         start_indexes = []
         if index_ans:
